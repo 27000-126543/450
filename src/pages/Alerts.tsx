@@ -19,7 +19,7 @@ const STATUS_BADGE: Record<string, [string, string]> = {
 }
 
 export default function Alerts() {
-  const { getFilteredAlerts, handleAlertAction, userRole, canApproveCurrentStep, getCurrentApprovalStep, getCurrentApprovalRole } = useAppStore()
+  const { getFilteredAlerts, handleAlertAction, userRole, canApproveStep, getCurrentApprovalStep, getCurrentApprovalRole, getCurrentStepLabel } = useAppStore()
   const alerts = getFilteredAlerts()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [filter, setFilter] = useState<string>('全部')
@@ -65,7 +65,8 @@ export default function Alerts() {
 
   const currentStepIdx = selected ? getCurrentApprovalStep(selected) : -1
   const currentStepRole = selected ? getCurrentApprovalRole(selected) : null
-  const canApprove = selected ? canApproveCurrentStep(selected) : false
+  const currentStepLabel = selected ? getCurrentStepLabel(selected) : null
+  const canApproveCurrent = selected ? canApproveStep(selected, currentStepIdx) : false
   const hasRejected = selected?.approvalFlow.some((s) => s.status === 'rejected') ?? false
   const allApproved = selected?.approvalFlow.every((s) => s.status === 'approved') ?? false
 
@@ -148,26 +149,26 @@ export default function Alerts() {
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
                           stepStatus === 'approved' ? 'bg-success/20 border-2 border-success' :
                           stepStatus === 'rejected' ? 'bg-danger/20 border-2 border-danger' :
-                          isCurrent && canApprove ? 'bg-cyan/20 border-2 border-cyan pulse-orange' :
-                          isCurrent && !canApprove ? 'bg-warning/10 border-2 border-warning' :
+                          isCurrent && canApproveStep(selected, idx) ? 'bg-cyan/20 border-2 border-cyan pulse-orange' :
+                          isCurrent && !canApproveStep(selected, idx) ? 'bg-warning/10 border-2 border-warning' :
                           'bg-card border-2 border-border'
                         }`}>
                           {stepStatus === 'approved' ? <CheckCircle2 className="w-4 h-4 text-success" /> :
                            stepStatus === 'rejected' ? <XCircle className="w-4 h-4 text-danger" /> :
-                           isCurrent && canApprove ? <CircleDot className="w-4 h-4 text-cyan" /> :
-                           <span className={`text-xs ${isCurrent && !canApprove ? 'text-warning' : 'text-text-muted'}`}>{idx + 1}</span>}
+                           isCurrent && canApproveStep(selected, idx) ? <CircleDot className="w-4 h-4 text-cyan" /> :
+                           <span className={`text-xs ${isCurrent && !canApproveStep(selected, idx) ? 'text-warning' : 'text-text-muted'}`}>{idx + 1}</span>}
                         </div>
                         {idx < 2 && <div className={`flex-1 h-0.5 ${stepStatus === 'approved' ? 'bg-success' : 'bg-border'}`} />}
                       </div>
                       <div className="text-xs font-medium text-text-primary mt-2">{STEP_LABELS[idx]}</div>
                       <div className="text-xs text-text-muted mt-0.5">{stepData?.approver ?? '—'}</div>
-                      {isCurrent && canApprove && (
+                      {isCurrent && canApproveStep(selected, idx) && (
                         <div className="flex gap-1 mt-2">
                           <button className="btn-primary text-xs px-2 py-0.5" onClick={() => handleAlertAction(selected.id, 'approve', idx + 1)}>批准</button>
                           <button className="btn-secondary text-xs px-2 py-0.5" onClick={() => handleAlertAction(selected.id, 'reject', idx + 1)}>驳回</button>
                         </div>
                       )}
-                      {isCurrent && !canApprove && currentStepRole && (
+                      {isCurrent && !canApproveStep(selected, idx) && currentStepRole && (
                         <div className="text-xs text-warning mt-2">等待{ROLE_LABELS[currentStepRole]}处理</div>
                       )}
                     </div>
@@ -188,9 +189,9 @@ export default function Alerts() {
               ) : (
                 <div className="flex flex-col items-center gap-3">
                   <div className="text-sm text-text-secondary">
-                    当前待处理：<span className="text-text-primary font-medium">{currentStepRole ? ROLE_LABELS[currentStepRole] : '—'}</span>
+                    当前待处理：<span className="text-text-primary font-medium">{currentStepLabel || '—'}</span>
                   </div>
-                  {canApprove && currentStepIdx >= 0 && (
+                  {canApproveCurrent && currentStepIdx >= 0 && (
                     <div className="flex gap-2">
                       <button className="btn-primary px-6" onClick={() => handleAlertAction(selected.id, 'approve', currentStepIdx + 1)}>批准</button>
                       <button className="btn-secondary px-6" onClick={() => handleAlertAction(selected.id, 'reject', currentStepIdx + 1)}>驳回</button>

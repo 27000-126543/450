@@ -9,6 +9,7 @@ import type {
   SpliceScheme,
   WeeklyReport,
   ProvinceHealthSummary,
+  CityDetail,
 } from '@/types'
 import {
   mockCableSegments,
@@ -25,6 +26,41 @@ interface ComputedStats {
   avgHealthIndex: number
   monthlyFaultRate: number
   avgRepairTime: number
+}
+
+function seededRandom(seed: number) {
+  let s = seed
+  return () => {
+    s = (s * 9301 + 49297) % 233280
+    return s / 233280
+  }
+}
+
+function hashString(str: string): number {
+  let h = 0
+  for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0
+  return Math.abs(h)
+}
+
+const computeStats = (segments: CableSegment[], seedStr: string): ComputedStats => {
+  if (segments.length === 0) {
+    return { totalCableKm: 0, avgHealthIndex: 0, monthlyFaultRate: 0, avgRepairTime: 0 }
+  }
+  const avgHealthIndex = Number((segments.reduce((s, c) => s + c.healthIndex, 0) / segments.length).toFixed(1))
+  const unhealthyCount = segments.filter(c => c.healthIndex < 80).length
+  const monthlyFaultRate = Number(((unhealthyCount / segments.length) * 2).toFixed(2))
+  const rand = seededRandom(hashString(seedStr))
+  const totalCableKm = Math.round(segments.length * 68 + rand() * 180 + 20)
+  const repairTimeBase = 100 - avgHealthIndex
+  const avgRepairTime = Number((repairTimeBase * 0.18 + 2.5 + rand() * 0.5).toFixed(1))
+  return { totalCableKm, avgHealthIndex, monthlyFaultRate, avgRepairTime }
+}
+
+const riskLevelOrder = { high: 0, medium: 1, low: 2 }
+const roleStepMap: Record<number, UserRole> = {
+  1: 'city',
+  2: 'province',
+  3: 'group',
 }
 
 interface AppState {
@@ -64,31 +100,15 @@ interface AppState {
   handleAlertAction: (alertId: string, action: 'approve' | 'reject' | 'escalate', step: number) => void
   autoEscalateAlerts: () => void
 
-  canApproveCurrentStep: (alert: AlertEvent) => boolean
+  canApproveStep: (alert: AlertEvent, stepIndex: number) => boolean
   getCurrentApprovalStep: (alert: AlertEvent) => number
   getCurrentApprovalRole: (alert: AlertEvent) => string | null
+  getCurrentStepLabel: (alert: AlertEvent) => string | null
 
   uploadInspectionPlan: (fileName: string, parsedData: string[][]) => void
   resetInspectionData: () => void
-}
 
-const computeStats = (segments: CableSegment[]): ComputedStats => {
-  if (segments.length === 0) {
-    return { totalCableKm: 0, avgHealthIndex: 0, monthlyFaultRate: 0, avgRepairTime: 0 }
-  }
-  const avgHealthIndex = Number((segments.reduce((s, c) => s + c.healthIndex, 0) / segments.length).toFixed(1))
-  const unhealthyCount = segments.filter(c => c.healthIndex < 80).length
-  const monthlyFaultRate = Number(((unhealthyCount / segments.length) * 2).toFixed(2))
-  const totalCableKm = Math.round(segments.length * 68 + Math.random() * 200)
-  const repairTimeBase = 100 - avgHealthIndex
-  const avgRepairTime = Number((repairTimeBase * 0.18 + 2.5).toFixed(1))
-  return { totalCableKm, avgHealthIndex, monthlyFaultRate, avgRepairTime }
-}
-
-const hashString = (str: string) => {
-  let h = 0
-  for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0
-  return Math.abs(h)
+  getFilteredReport: () => WeeklyReport | null
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -171,17 +191,30 @@ export const useAppStore = create<AppState>((set, get) => ({
       summaries = summaries.filter(s => s.province === selectedProvince)
     }
     if (selectedCarrier !== '全部') {
-      const carrierSegments = cableSegments.filter(c => c.carrier === selectedCarrier)
+      const carrierSegs = cableSegments.filter(c => c.carrier === selectedCarrier)
+      const seedBase = `carrier-${selectedCarrier}`
       summaries = summaries.map(s => {
-        const provinceCarrierSegments = carrierSegments.filter(c => c.province === s.province)
-        const allProvinceSegments = cableSegments.filter(c => c.province === s.province)
-        if (provinceCarrierSegments.length === 0) return null
-        const ratio = provinceCarrierSegments.length / Math.max(allProvinceSegments.length, 1)
+        const provCarrierSegs = carrierSegs.filter(c => c.province === s.province)
+        const allProvSegs = cableSegments.filter(c => c.province === s.province)
+        if (provCarrierSegs.length === 0) return null
+        const ratio = provCarrierSegs.length / Math.max(allProvSegs.length, 1)
+        const rand = seededRandom(hashString(seedBase + s.province))
+        const adjustedCityDetails: CityDetail[] = s.cityDetails.map(cd => {
+          const cityCarrierSegs = provCarrierSegs.filter(cs => cs.city === cd.city)
+          if (cityCarrierSegs.length === 0) return cd
+          return {
+            ...cd,
+            healthIndex: Number((cityCarrierSegs.reduce((a, c) => a + c.healthIndex, 0) / cityCarrierSegs.length).toFixed(1)),
+            cableCount: cityCarrierSegs.length,
+            faultCount: Math.max(1, Math.round(cd.faultCount * ratio * (0.8 + rand() * 0.4))),
+          }
+        })
         return {
           ...s,
           totalCableKm: Math.round(s.totalCableKm * ratio),
-          avgHealthIndex: Number((provinceCarrierSegments.reduce((a, c) => a + c.healthIndex, 0) / provinceCarrierSegments.length).toFixed(1)),
-          faultRate: Number((s.faultRate * (0.8 + Math.random() * 0.4)).toFixed(2)),
+          avgHealthIndex: Number((provCarrierSegs.reduce((a, c) => a + c.healthIndex, 0) / provCarrierSegs.length).toFixed(1)),
+          faultRate: Number((s.faultRate * (0.85 + rand() * 0.3)).toFixed(2)),
+          cityDetails: adjustedCityDetails,
         }
       }).filter((s): s is ProvinceHealthSummary => s !== null)
     }
@@ -189,55 +222,63 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   getProvinceSummary: (province) => {
-    const { provinceHealthSummaries } = get()
-    return provinceHealthSummaries.find((s) => s.province === province)
+    const { getFilteredProvinceSummaries } = get()
+    return getFilteredProvinceSummaries().find((s) => s.province === province)
   },
 
   getComputedStats: () => {
-    const { getFilteredCableSegments, getFilteredProvinceSummaries, provinceHealthSummaries, selectedProvince, selectedCarrier, userRole, userProvince } = get()
+    const { getFilteredCableSegments, selectedProvince, selectedCarrier, userRole, userProvince, userCity } = get()
     const segments = getFilteredCableSegments()
-    if (segments.length === 0) return computeStats([])
-    if (selectedProvince || selectedCarrier !== '全部' || userRole !== 'group') {
-      return computeStats(segments)
-    }
-    const allSegments = get().cableSegments
-    return computeStats(allSegments)
+    const seedKey = `stats-${userRole}-${userProvince}-${userCity}-${selectedProvince ?? 'all'}-${selectedCarrier}`
+    return computeStats(segments, seedKey)
   },
 
   getCurrentApprovalStep: (alert) => {
+    if (alert.level === 1) return 0
     const idx = alert.approvalFlow.findIndex(s => s.status === 'pending')
     return idx === -1 ? alert.approvalFlow.length : idx
   },
 
   getCurrentApprovalRole: (alert) => {
+    if (alert.level === 1) return 'city'
     const step = get().getCurrentApprovalStep(alert)
     if (step >= alert.approvalFlow.length) return null
     return alert.approvalFlow[step].role
   },
 
-  canApproveCurrentStep: (alert) => {
-    const role = get().getCurrentApprovalRole(alert)
-    if (!role) return false
-    const { userRole } = get()
-    if (alert.approvalFlow.length <= 1) {
-      return userRole === 'province' || userRole === 'group' || userRole === 'city'
+  getCurrentStepLabel: (alert) => {
+    if (alert.level === 1) return '班组长确认'
+    const step = get().getCurrentApprovalStep(alert)
+    if (step >= alert.approvalFlow.length) return null
+    const labels = ['班组长确认', '区域经理复核', '省公司批准']
+    return labels[step] ?? null
+  },
+
+  canApproveStep: (alert, stepIndex) => {
+    if (alert.level === 1) {
+      return stepIndex === 0 && (get().userRole === 'city' || get().userRole === 'group')
     }
-    if (role === 'city') return userRole === 'city' || userRole === 'group'
-    if (role === 'province') return userRole === 'province' || userRole === 'group'
-    if (role === 'group') return userRole === 'group'
-    return false
+    const flow = alert.approvalFlow
+    if (stepIndex >= flow.length) return false
+    const step = flow[stepIndex]
+    if (step.status !== 'pending') return false
+    const requiredRole = roleStepMap[step.step]
+    const { userRole } = get()
+    if (userRole === 'group') return true
+    return userRole === requiredRole
   },
 
   handleAlertAction: (alertId, action, step) => {
     set((state) => ({
       alertEvents: state.alertEvents.map((alert) => {
         if (alert.id !== alertId) return alert
-        const newFlow = [...alert.approvalFlow]
-        const stepIndex = newFlow.findIndex((s) => s.step === step)
 
         if (action === 'escalate') {
+          const created = new Date(alert.createdAt).getTime()
+          const twoHours = 2 * 60 * 60 * 1000
+          const escalateTime = new Date(created + twoHours).toLocaleString('zh-CN')
           const escalatedFlow = [
-            { step: 1, role: 'city', approver: '属地运维班组长', status: 'pending' as const },
+            { step: 1, role: 'city', approver: '属地运维班组长', status: 'approved' as const, timestamp: escalateTime, comment: '超时未处置，自动升级' },
             { step: 2, role: 'province', approver: '区域经理复核', status: 'pending' as const },
             { step: 3, role: 'group', approver: '省公司网络部批准', status: 'pending' as const },
           ]
@@ -249,24 +290,25 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
         }
 
-        if (stepIndex < 0) return alert
+        const flowIdx = alert.approvalFlow.findIndex((s) => s.step === step)
+        if (flowIdx < 0) return alert
 
-        const currentStep = get().getCurrentApprovalStep(alert)
-        const expectedStepNumber = currentStep + 1
+        const currentStepIdx = get().getCurrentApprovalStep(alert)
+        if (flowIdx !== currentStepIdx) return alert
 
-        if (step !== expectedStepNumber) {
-          return alert
-        }
+        if (!get().canApproveStep(alert, flowIdx)) return alert
+
+        const newFlow = [...alert.approvalFlow]
 
         if (action === 'approve') {
-          newFlow[stepIndex] = {
-            ...newFlow[stepIndex],
+          const allBefore = flowIdx === 0 || newFlow.slice(0, flowIdx).every(s => s.status === 'approved')
+          if (!allBefore) return alert
+          newFlow[flowIdx] = {
+            ...newFlow[flowIdx],
             status: 'approved' as const,
             timestamp: new Date().toLocaleString('zh-CN'),
           }
           const allApproved = newFlow.every((s) => s.status === 'approved')
-          const allBefore = stepIndex === 0 || newFlow.slice(0, stepIndex).every(s => s.status === 'approved')
-          if (!allBefore) return alert
           return {
             ...alert,
             approvalFlow: newFlow,
@@ -275,8 +317,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
 
         if (action === 'reject') {
-          newFlow[stepIndex] = {
-            ...newFlow[stepIndex],
+          newFlow[flowIdx] = {
+            ...newFlow[flowIdx],
             status: 'rejected' as const,
             timestamp: new Date().toLocaleString('zh-CN'),
             comment: '需要补充材料后重新审批',
@@ -299,8 +341,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           const twoHours = 2 * 60 * 60 * 1000
           if (now - created > twoHours) {
             changed = true
+            const escalateTime = new Date(created + twoHours).toLocaleString('zh-CN')
             const escalatedFlow = [
-              { step: 1, role: 'city', approver: '属地运维班组长', status: 'approved' as const, timestamp: new Date(created + twoHours).toLocaleString('zh-CN') },
+              { step: 1, role: 'city', approver: '属地运维班组长', status: 'approved' as const, timestamp: escalateTime, comment: '超时未处置，自动升级' },
               { step: 2, role: 'province', approver: '区域经理复核', status: 'pending' as const },
               { step: 3, role: 'group', approver: '省公司网络部批准', status: 'pending' as const },
             ]
@@ -319,91 +362,107 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   uploadInspectionPlan: (fileName, parsedData) => {
-    const { cableSegments, baseRiskPredictions, baseRecommendedRoutes, baseSpliceSchemes } = get()
+    const { cableSegments } = get()
     const header = parsedData[0] || []
     const rows = parsedData.slice(1)
 
-    const segNameIdx = header.findIndex(h => String(h).includes('光缆') || String(h).includes('段落') || String(h).includes('名称') || String(h).includes('段'))
-    const dateIdx = header.findIndex(h => String(h).includes('日期') || String(h).includes('巡检') || String(h).includes('时间'))
-    const regionIdx = header.findIndex(h => String(h).includes('地区') || String(h).includes('区域') || String(h).includes('省份') || String(h).includes('城市'))
-    const riskIdx = header.findIndex(h => String(h).includes('风险') || String(h).includes('等级') || String(h).includes('级别'))
+    const segNameIdx = header.findIndex(h => String(h).includes('光缆') || String(h).includes('段落') || String(h).includes('名称') || String(h).includes('段') || String(h).includes('线路'))
+    const dateIdx = header.findIndex(h => String(h).includes('日期') || String(h).includes('巡检') || String(h).includes('时间') || String(h).includes('计划'))
+    const regionIdx = header.findIndex(h => String(h).includes('地区') || String(h).includes('区域') || String(h).includes('省份') || String(h).includes('城市') || String(h).includes('地市'))
+    const riskIdx = header.findIndex(h => String(h).includes('风险') || String(h).includes('等级') || String(h).includes('级别') || String(h).includes('重要性'))
+    const lenIdx = header.findIndex(h => String(h).includes('长度') || String(h).includes('公里') || String(h).includes('里程') || String(h).includes('km'))
+    const teamIdx = header.findIndex(h => String(h).includes('班组') || String(h).includes('责任人') || String(h).includes('负责人'))
 
-    const extractedSegments = new Set<string>()
-    const extractedRegions = new Set<string>()
+    const extractedNames: string[] = []
+    const extractedRegions: string[] = []
+    const extractedDates: string[] = []
     rows.forEach((row) => {
-      if (segNameIdx >= 0 && row[segNameIdx]) extractedSegments.add(String(row[segNameIdx]))
-      if (regionIdx >= 0 && row[regionIdx]) extractedRegions.add(String(row[regionIdx]))
+      if (segNameIdx >= 0 && row[segNameIdx]) {
+        extractedNames.push(String(row[segNameIdx]).trim())
+      }
+      if (regionIdx >= 0 && row[regionIdx]) {
+        const region = String(row[regionIdx]).trim()
+        if (region && !extractedRegions.includes(region)) extractedRegions.push(region)
+      }
+      if (dateIdx >= 0 && row[dateIdx]) {
+        extractedDates.push(String(row[dateIdx]))
+      }
     })
 
     const fileHash = hashString(fileName + JSON.stringify(parsedData.slice(0, 10)))
+    const rand = seededRandom(fileHash)
 
     const newRisks: RiskPrediction[] = []
-    const matchedCables = cableSegments.filter(c =>
-      extractedSegments.size > 0
-        ? Array.from(extractedSegments).some(n => c.name.includes(n.slice(0, 4)) || n.includes(c.name.slice(0, 4)))
-        : true
-    )
-    const riskSource = matchedCables.length > 0 ? matchedCables : cableSegments.slice(0, 8)
-    const factorPool = ['光功率骤降', '衰减持续上升', '振动异常', '温度偏高', '健康指数持续下降', '接头老化', '施工区域邻近', '光纤利用率过高', '外力破坏隐患', '护套老化']
-    riskSource.slice(0, 6).forEach((cable, i) => {
-      const rnd = (fileHash * (i + 3)) % 100
-      const level: 'high' | 'medium' | 'low' = rnd > 70 ? 'high' : rnd > 40 ? 'medium' : 'low'
+    const displayNames = extractedNames.length > 0 ? extractedNames : extractedRegions.map(r => `${r}光缆段`)
+    const numRisks = Math.min(8, Math.max(4, displayNames.length))
+
+    const factorPool = ['光功率骤降', '衰减持续上升', '振动异常', '温度偏高', '健康指数持续下降', '接头老化', '施工区域邻近', '光纤利用率过高', '外力破坏隐患', '护套老化', '鼠害隐患', '施工扰动']
+
+    for (let i = 0; i < numRisks; i++) {
+      const name = displayNames[i % displayNames.length] + (i >= displayNames.length ? `-${i + 1}` : '')
+      const rnd = Math.floor(rand() * 100)
+      const level: 'high' | 'medium' | 'low' = rnd > 70 ? 'high' : rnd > 35 ? 'medium' : 'low'
       const fCount = level === 'high' ? 3 : level === 'medium' ? 2 : 1
       const factors: string[] = []
       for (let f = 0; f < fCount; f++) {
-        factors.push(factorPool[(rnd + f * 7) % factorPool.length])
+        factors.push(factorPool[Math.floor(rand() * factorPool.length)])
       }
-      const futureDate = new Date(Date.now() + (rnd % 60 + 15) * 86400000)
+      const daysLater = 15 + Math.floor(rand() * 75)
+      const futureDate = new Date(Date.now() + daysLater * 86400000)
+      const region = extractedRegions.length > 0 ? extractedRegions[i % extractedRegions.length] : ''
+      const cableId = `upload-${fileHash}-${i}`
+
       newRisks.push({
-        cableSegmentId: cable.id,
-        cableSegmentName: cable.name,
+        cableSegmentId: cableId,
+        cableSegmentName: region ? `${region}-${name}` : name,
         riskLevel: level,
         riskFactors: Array.from(new Set(factors)),
         predictedDate: futureDate.toISOString().slice(0, 10),
-        confidence: Number((0.35 + (rnd % 60) / 100).toFixed(2)),
-      })
-    })
-    if (newRisks.length === 0) {
-      baseRiskPredictions.forEach((r, i) => {
-        newRisks.push({
-          ...r,
-          confidence: Number(Math.min(0.95, r.confidence + ((fileHash + i * 11) % 30) / 100).toFixed(2)),
-        })
+        confidence: Number((0.45 + rand() * 0.5).toFixed(2)),
       })
     }
 
+    newRisks.sort((a, b) => riskLevelOrder[a.riskLevel] - riskLevelOrder[b.riskLevel])
+
     const newRoutes: RecommendedRoute[] = []
-    const shuffled = [...cableSegments].sort((a, b) => (hashString(a.id + fileHash) - hashString(b.id + fileHash)))
-    for (let r = 0; r < Math.min(4, Math.ceil(shuffled.length / 3)); r++) {
-      const routeSegs = shuffled.slice(r * 3, r * 3 + 3)
+    const routeCount = Math.min(4, Math.max(2, Math.ceil(displayNames.length / 3)))
+    for (let r = 0; r < routeCount; r++) {
+      const routeSegs = displayNames.slice(r * 2, r * 2 + 3)
+      const routeRegions = extractedRegions.length > 0
+        ? extractedRegions.slice(r, r + 2).join('-')
+        : `路线${r + 1}`
       newRoutes.push({
         id: `route-${fileHash}-${r}`,
-        name: extractedRegions.size > 0
-          ? `${Array.from(extractedRegions)[r % extractedRegions.size]}巡检路线${r + 1}`
-          : `智能推荐路线${r + 1}-${fileName.slice(0, 6)}`,
-        segments: routeSegs.map(s => s.id),
-        totalDistance: 120 + ((fileHash + r * 47) % 480),
-        estimatedTime: `${2 + ((fileHash + r * 5) % 8)}h`,
-        priorityScore: 50 + ((fileHash + r * 13) % 50),
+        name: `${routeRegions}巡检路线${r + 1}`,
+        segments: routeSegs.length > 0 ? routeSegs : [fileHash + '-' + r],
+        totalDistance: 80 + Math.floor(rand() * 520),
+        estimatedTime: `${2 + Math.floor(rand() * 7)}h`,
+        priorityScore: 40 + Math.floor(rand() * 58),
       })
     }
 
     const newSchemes: SpliceScheme[] = []
-    const cablePts = ['市区交界', '城郊结合', '光缆接头盒A', '主干交汇点', '机房进线', '管道转弯处']
-    const materials = ['熔接盒', '尾纤', '热缩套管', '光缆接头盒', 'ODF配线架', '光纤熔接机耗材', '清洁棉片', '酒精泵']
-    for (let s = 0; s < Math.min(5, newRoutes.length + 1); s++) {
-      const rnd = (fileHash + s * 23) % 100
+    const cablePts = ['市区交界', '城郊结合', '主干交汇', '机房进线', '管道转弯', '跨河点位', '高速下穿', '开发区入口']
+    const materials = ['熔接盒', '尾纤', '热缩套管', 'ODF配线架', '光纤熔接机耗材', '清洁棉片', '酒精泵', '光缆接头盒']
+    const schemeCount = Math.min(6, routeCount + 2)
+    for (let s = 0; s < schemeCount; s++) {
+      const region = extractedRegions.length > 0 ? extractedRegions[s % extractedRegions.length] : cablePts[s % cablePts.length]
+      const ptIdx = Math.floor(rand() * cablePts.length)
+      const fiberCount = [12, 24, 48, 96][Math.floor(rand() * 4)]
+      const matCount = 2 + Math.floor(rand() * 2)
+      const selectedMats: string[] = []
+      for (let m = 0; m < matCount; m++) {
+        selectedMats.push(materials[Math.floor(rand() * materials.length)])
+      }
       newSchemes.push({
         id: `scheme-${fileHash}-${s}`,
-        splicePoint: extractedRegions.size > 0
-          ? `${Array.from(extractedRegions)[s % extractedRegions.size]}-${cablePts[(rnd + s) % cablePts.length]}`
-          : `${cableSegments[s % cableSegments.length].city}-${cablePts[s % cablePts.length]}`,
+        splicePoint: `${region}-${cablePts[ptIdx]}`,
         requiredMaterials: [
-          `${rnd > 50 ? 48 : rnd > 25 ? 24 : 12}芯熔接盒`,
-          ...materials.slice(s % 3, s % 3 + 2),
+          `${fiberCount}芯熔接盒`,
+          ...Array.from(new Set(selectedMats)),
         ],
-        estimatedTime: `${1 + (rnd % 5)}h-${3 + (rnd % 6)}h`,
-        fiberCount: rnd > 60 ? 16 : rnd > 30 ? 12 : 8,
+        estimatedTime: `${1 + Math.floor(rand() * 4)}h-${3 + Math.floor(rand() * 5)}h`,
+        fiberCount,
       })
     }
 
@@ -421,5 +480,76 @@ export const useAppStore = create<AppState>((set, get) => ({
       recommendedRoutes: [...baseRecommendedRoutes],
       spliceSchemes: [...baseSpliceSchemes],
     })
+  },
+
+  getFilteredReport: () => {
+    const { weeklyReports, userRole, userProvince, userCity, getFilteredProvinceSummaries, cableSegments, getFilteredCableSegments } = get()
+    const latest = weeklyReports[weeklyReports.length - 1]
+    if (!latest) return null
+
+    if (userRole === 'group') return latest
+
+    const seedStr = `report-${userRole}-${userProvince}-${userCity}`
+    const rand = seededRandom(hashString(seedStr))
+    const filteredSegs = getFilteredCableSegments()
+    const summaries = getFilteredProvinceSummaries()
+
+    if (filteredSegs.length === 0) {
+      return {
+        ...latest,
+        id: `filtered-${seedStr}`,
+        faultRateYoY: 0,
+        faultRateMoM: 0,
+        avgRepairTime: 0,
+        fiberUtilization: 0,
+        repairTimeRanking: [],
+        faultTypeDistribution: {},
+        recommendations: ['暂无辖区数据'],
+      }
+    }
+
+    const avgHealth = filteredSegs.reduce((s, c) => s + c.healthIndex, 0) / filteredSegs.length
+    const baseYoY = latest.faultRateYoY
+    const baseMoM = latest.faultRateMoM
+    const scaleFactor = filteredSegs.length / Math.max(cableSegments.length, 1)
+
+    const filteredRanking = summaries
+      .map(s => ({ province: s.province, avgHours: s.avgRepairTime + rand() * 1.5 - 0.75 }))
+      .sort((a, b) => a.avgHours - b.avgHours)
+      .slice(0, 10)
+
+    const yoyshift = (rand() - 0.4) * 3
+    const momshift = (rand() - 0.5) * 2
+
+    const faultTypes = Object.keys(latest.faultTypeDistribution)
+    const scaledFaultDist: Record<string, number> = {}
+    faultTypes.forEach(t => {
+      scaledFaultDist[t] = Math.max(1, Math.round(latest.faultTypeDistribution[t] * scaleFactor * (0.8 + rand() * 0.4)))
+    })
+
+    const baseRecomms = latest.recommendations
+    const regionRecommendations = [
+      `${userProvince || userCity}辖区内高风险段巡检频次建议提升至每两周一次`,
+      `建议加强${userProvince || userCity}区域备纤资源储备`,
+      `辖区内光缆健康指数区域差异较大，建议重点关注故障多发段落`,
+      `${userCity || userProvince}班组人员配置建议补充1-2人`,
+      '建议引入光缆振动监测传感器补充预警能力',
+      '重点段落的接头盒定期检测频率建议从半年缩短为季度',
+    ]
+    const finalRecomms = [...regionRecommendations, ...baseRecomms.slice(0, 2)].slice(0, 5)
+
+    return {
+      ...latest,
+      id: `filtered-${seedStr}`,
+      weekStart: latest.weekStart,
+      weekEnd: latest.weekEnd,
+      faultRateYoY: Number((baseYoY + yoyshift).toFixed(1)),
+      faultRateMoM: Number((baseMoM + momshift).toFixed(1)),
+      avgRepairTime: Number((latest.avgRepairTime * (0.9 + rand() * 0.2)).toFixed(1)),
+      fiberUtilization: Math.max(40, Math.round(latest.fiberUtilization * (0.85 + rand() * 0.3))),
+      repairTimeRanking: filteredRanking.map(r => ({ ...r, avgHours: Number(r.avgHours.toFixed(1)) })),
+      faultTypeDistribution: scaledFaultDist,
+      recommendations: finalRecomms,
+    }
   },
 }))

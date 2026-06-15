@@ -10,26 +10,31 @@ const priorityLabel: Record<number, string> = { 0: '高', 1: '中', 2: '低' }
 const yoyColor = (v: number) => v <= 0 ? 'text-success' : 'text-danger'
 
 export default function Reports() {
-  const { weeklyReports } = useAppStore()
+  const { weeklyReports, getFilteredReport, userRole, userProvince, userCity } = useAppStore()
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [dropdownOpen, setDropdownOpen] = useState(false)
-  const report = weeklyReports[selectedIdx] ?? weeklyReports[0]
+  const baseReport = weeklyReports[selectedIdx] ?? weeklyReports[0]
+  const report = getFilteredReport() ?? baseReport
 
   const faultTypes = Object.keys(report.faultTypeDistribution)
   const currentValues = Object.values(report.faultTypeDistribution)
   const prevReport = weeklyReports[selectedIdx + 1]
-  const prevValues = prevReport ? faultTypes.map((k) => prevReport.faultTypeDistribution[k] ?? 0) : currentValues.map(() => 0)
+  const prevValues = prevReport
+    ? faultTypes.map((k) => prevReport.faultTypeDistribution[k] ?? 0)
+    : currentValues.map(() => 0)
   const totalFaults = currentValues.reduce((a, b) => a + b, 0)
 
   const ranking = [...report.repairTimeRanking].sort((a, b) => a.avgHours - b.avgHours)
   const maxHours = Math.max(...ranking.map((r) => r.avgHours), 1)
+
+  const scopeLabel = userRole === 'group' ? '全国' : userRole === 'province' ? `${userProvince}省` : `${userCity}市`
 
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-text-primary">运维诊断报告</h1>
-          <p className="text-sm text-text-muted">每周自动生成</p>
+          <p className="text-sm text-text-muted">每周自动生成 · 当前范围：<span className="text-cyan">{scopeLabel}</span></p>
         </div>
         <div className="flex items-center gap-3">
           <div className="relative">
@@ -70,8 +75,8 @@ export default function Reports() {
         </div>
         <div className="card card-glow p-4">
           <p className="text-xs text-text-muted">纤芯利用率</p>
-          <p className="stat-value font-din text-text-primary">{(report.fiberUtilization * 100).toFixed(0)}%</p>
-          <div className="health-bar mt-2"><div className="health-bar-fill" style={{ width: `${report.fiberUtilization * 100}%` }} /></div>
+          <p className="stat-value font-din text-text-primary">{report.fiberUtilization}%</p>
+          <div className="health-bar mt-2"><div className="health-bar-fill" style={{ width: `${report.fiberUtilization}%`, background: 'linear-gradient(90deg, #00D4FF, #00E676)' }} /></div>
         </div>
       </div>
 
@@ -79,22 +84,42 @@ export default function Reports() {
         <div className="card p-4">
           <h3 className="mb-3 text-sm font-semibold text-text-primary">故障类型对比</h3>
           <ReactECharts option={{
-            tooltip: { trigger: 'axis' }, legend: { data: ['本周', '上周'], textStyle: { color: '#9ca3af' } },
-            xAxis: { type: 'category', data: faultTypes, axisLabel: { color: '#9ca3af' } },
-            yAxis: { type: 'value', axisLabel: { color: '#9ca3af' }, splitLine: { lineStyle: { color: '#1e293b' } } },
+            tooltip: { trigger: 'axis', backgroundColor: '#152238', borderColor: '#1E3A5F', textStyle: { color: '#E8F0FE', fontSize: 12 } },
+            legend: { data: ['本周', '上周'], textStyle: { color: '#8BA3C7' } },
+            grid: { top: 40, right: 20, bottom: 30, left: 50 },
+            xAxis: { type: 'category', data: faultTypes, axisLabel: { color: '#8BA3C7' }, axisLine: { lineStyle: { color: '#1E3A5F' } } },
+            yAxis: { type: 'value', axisLabel: { color: '#8BA3C7' }, splitLine: { lineStyle: { color: '#1E3A5F22' } } },
             series: [
-              { name: '本周', type: 'bar', data: currentValues, itemStyle: { color: '#06b6d4' } },
-              { name: '上周', type: 'bar', data: prevValues, itemStyle: { color: '#475569' } },
+              { name: '本周', type: 'bar', data: currentValues, itemStyle: { color: '#06b6d4', borderRadius: [4, 4, 0, 0] }, barWidth: 28 },
+              { name: '上周', type: 'bar', data: prevValues, itemStyle: { color: '#475569', borderRadius: [4, 4, 0, 0] }, barWidth: 28 },
             ],
           }} style={{ height: 260 }} />
         </div>
         <div className="card p-4">
           <h3 className="mb-3 text-sm font-semibold text-text-primary">修复时长排名</h3>
           <ReactECharts option={{
-            tooltip: { trigger: 'axis' }, grid: { left: 60, right: 20, top: 10, bottom: 20 },
-            xAxis: { type: 'value', name: '小时', axisLabel: { color: '#9ca3af' }, splitLine: { lineStyle: { color: '#1e293b' } } },
-            yAxis: { type: 'category', data: ranking.map((r) => r.province), axisLabel: { color: '#9ca3af' } },
-            series: [{ type: 'bar', data: ranking.map((r) => ({ value: r.avgHours, itemStyle: { color: `rgb(${Math.round((r.avgHours / maxHours) * 239)}, ${Math.round((1 - r.avgHours / maxHours) * 200 + 55)}, 68)` } })) }],
+            tooltip: { trigger: 'axis', backgroundColor: '#152238', borderColor: '#1E3A5F', textStyle: { color: '#E8F0FE', fontSize: 12 }, formatter: '{b}: {c}小时' },
+            grid: { left: 60, right: 30, top: 10, bottom: 20 },
+            xAxis: { type: 'value', name: '小时', axisLabel: { color: '#8BA3C7' }, splitLine: { lineStyle: { color: '#1E3A5F22' } } },
+            yAxis: { type: 'category', data: ranking.map((r) => r.province), axisLabel: { color: '#8BA3C7' } },
+            series: [{
+              type: 'bar',
+              data: ranking.map((r) => ({
+                value: r.avgHours,
+                itemStyle: {
+                  color: {
+                    type: 'linear', x: 0, y: 0, x2: 1, y2: 0,
+                    colorStops: [
+                      { offset: 0, color: '#00E676' },
+                      { offset: r.avgHours / maxHours * 0.5, color: '#FF9100' },
+                      { offset: 1, color: '#FF1744' },
+                    ],
+                  },
+                  borderRadius: [0, 4, 4, 0],
+                },
+              })),
+              barWidth: 14,
+            }],
           }} style={{ height: 260 }} />
         </div>
       </div>
@@ -103,11 +128,22 @@ export default function Reports() {
         <div className="card p-4">
           <h3 className="mb-3 text-sm font-semibold text-text-primary">故障类型分布</h3>
           <ReactECharts option={{
-            tooltip: { trigger: 'item' }, color: ['#06b6d4', '#f59e0b', '#ef4444', '#10b981', '#8b5cf6'],
-            series: [{ type: 'pie', radius: ['45%', '70%'], label: { color: '#9ca3af' },
+            tooltip: { trigger: 'item', backgroundColor: '#152238', borderColor: '#1E3A5F', textStyle: { color: '#E8F0FE' } },
+            color: ['#06b6d4', '#f59e0b', '#ef4444', '#10b981', '#8b5cf6', '#0ea5e9'],
+            series: [{
+              type: 'pie', radius: ['45%', '70%'],
+              label: { color: '#8BA3C7', fontSize: 11 },
+              labelLine: { lineStyle: { color: '#5A7A9E' } },
               data: faultTypes.map((k, i) => ({ name: k, value: currentValues[i] })),
-              emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } } }],
-            graphic: [{ type: 'text', left: 'center', top: 'middle', style: { text: `${totalFaults}`, fontSize: 28, fontWeight: 'bold', fill: '#f1f5f9', textAlign: 'center' } }],
+              emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } },
+            }],
+            graphic: [{
+              type: 'text', left: 'center', top: 'middle',
+              style: { text: `${totalFaults}`, fontSize: 28, fontWeight: 'bold', fill: '#E8F0FE', textAlign: 'center' },
+            }, {
+              type: 'text', left: 'center', top: '57%',
+              style: { text: '总故障数', fontSize: 11, fill: '#8BA3C7', textAlign: 'center' },
+            }],
           }} style={{ height: 280 }} />
         </div>
 
@@ -116,8 +152,8 @@ export default function Reports() {
           <div className="space-y-3">
             {report.recommendations.map((rec, i) => (
               <div key={i} className={`rounded-lg border-l-4 ${priorityColors[i % 3]} bg-card-hover p-3`}>
-                <div className="flex items-center gap-2">
-                  <Lightbulb size={16} className="text-cyan" />
+                <div className="flex items-start gap-2">
+                  <Lightbulb size={16} className="text-cyan mt-0.5 shrink-0" />
                   <span className="text-sm text-text-primary">{rec}</span>
                 </div>
                 <span className={`badge ${priorityBadge[i % 3]} mt-2 inline-block`}>{priorityLabel[i % 3]}优先</span>
@@ -148,7 +184,7 @@ export default function Reports() {
                   <td className={`py-2 font-din ${yoyColor(r.faultRateYoY)}`}>{r.faultRateYoY > 0 ? '+' : ''}{r.faultRateYoY}%</td>
                   <td className={`py-2 font-din ${yoyColor(r.faultRateMoM)}`}>{r.faultRateMoM > 0 ? '+' : ''}{r.faultRateMoM}%</td>
                   <td className="py-2 font-din text-text-secondary">{r.avgRepairTime}小时</td>
-                  <td className="py-2 font-din text-text-secondary">{(r.fiberUtilization * 100).toFixed(0)}%</td>
+                  <td className="py-2 font-din text-text-secondary">{r.fiberUtilization}%</td>
                   <td className="py-2">
                     <button className="btn-secondary text-xs" onClick={() => setSelectedIdx(i)}>查看</button>
                   </td>
