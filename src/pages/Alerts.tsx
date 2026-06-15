@@ -6,7 +6,7 @@ import ReactECharts from 'echarts-for-react'
 const FILTERS = ['全部', '一级预警', '二级预警', '待处理', '已升级'] as const
 const STEP_LABELS = ['班组长确认', '区域经理复核', '省公司批准']
 const ROLE_LABELS: Record<string, string> = {
-  city: '属地运维班组长',
+  city: '运维班组长',
   province: '区域经理',
   group: '省公司网络部',
 }

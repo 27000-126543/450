@@ -276,9 +276,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           const twoHours = 2 * 60 * 60 * 1000
           const escalateTime = new Date(created + twoHours).toLocaleString('zh-CN')
           const escalatedFlow = [
-            { step: 1, role: 'city', approver: '属地运维班组长', status: 'approved' as const, timestamp: escalateTime, comment: '超时未处置，自动升级' },
-            { step: 2, role: 'province', approver: '区域经理复核', status: 'pending' as const },
-            { step: 3, role: 'group', approver: '省公司网络部批准', status: 'pending' as const },
+            { step: 1, role: 'city', approver: '运维班组长', status: 'approved' as const, timestamp: escalateTime, comment: '超时未处置，自动升级' },
+            { step: 2, role: 'province', approver: '区域经理', status: 'pending' as const },
+            { step: 3, role: 'group', approver: '省公司网络部', status: 'pending' as const },
           ]
           return {
             ...alert,
@@ -364,12 +364,46 @@ export const useAppStore = create<AppState>((set, get) => ({
     const header = parsedData[0] || []
     const rows = parsedData.slice(1)
 
+    const headerStr = (h: unknown) => String(h ?? '')
+
+    const isDateColumn = (h: string) => {
+      if (!h) return false
+      if (h.includes('人员') || h.includes('负责人') || h.includes('班组') || h.includes('工程师') || h.includes('员工')) return false
+      if (h.includes('巡检日期') || h.includes('计划日期') || h.includes('检测日期') || h.includes('完成日期')) return true
+      if (h.includes('日期') && !h.includes('名称') && !h.includes('类型')) return true
+      return false
+    }
+
+    const dateScores = header.map((h, i) => {
+      const s = headerStr(h)
+      let score = 0
+      if (s.includes('巡检日期')) score += 100
+      else if (s.includes('计划日期')) score += 90
+      else if (s.includes('日期') && !isDateColumn(s) === false) score += 80
+      if (s.includes('日期')) score += 50
+      if (s.includes('时间')) score += 30
+      if (s.includes('巡检') && !s.includes('人员') && !s.includes('班组')) score += 20
+      if (s.includes('计划') && !s.includes('人员')) score += 15
+      return { idx: i, score }
+    })
+    dateScores.sort((a, b) => b.score - a.score)
+    const dateIdx = dateScores[0]?.score > 0 ? dateScores[0].idx : -1
+
     const segNameIdx = header.findIndex(h => String(h).includes('光缆') || String(h).includes('段落') || String(h).includes('名称') || String(h).includes('段') || String(h).includes('线路'))
-    const dateIdx = header.findIndex(h => String(h).includes('日期') || String(h).includes('巡检') || String(h).includes('时间') || String(h).includes('计划'))
     const regionIdx = header.findIndex(h => String(h).includes('地区') || String(h).includes('区域') || String(h).includes('省份') || String(h).includes('城市') || String(h).includes('地市'))
     const riskIdx = header.findIndex(h => String(h).includes('风险') || String(h).includes('等级') || String(h).includes('级别') || String(h).includes('重要性'))
     const lenIdx = header.findIndex(h => String(h).includes('长度') || String(h).includes('公里') || String(h).includes('里程') || String(h).includes('km'))
     const teamIdx = header.findIndex(h => String(h).includes('班组') || String(h).includes('责任人') || String(h).includes('负责人'))
+
+    const fileHash = hashString(fileName + JSON.stringify(parsedData.slice(0, 10)))
+    const rand = seededRandom(fileHash)
+
+    const parseDate = (dateStr: string): Date | null => {
+      if (!dateStr) return null
+      const s = String(dateStr).replace(/\./g, '-').replace(/\//g, '-').trim()
+      const d = new Date(s)
+      return isNaN(d.getTime()) ? null : d
+    }
 
     const extractedNames: string[] = []
     const extractedRegions: string[] = []
@@ -383,24 +417,23 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (region && !extractedRegions.includes(region)) extractedRegions.push(region)
       }
       if (dateIdx >= 0 && row[dateIdx]) {
-        extractedDates.push(String(row[dateIdx]))
+        const d = parseDate(String(row[dateIdx]))
+        if (d) extractedDates.push(String(row[dateIdx]))
       }
     })
-
-    const fileHash = hashString(fileName + JSON.stringify(parsedData.slice(0, 10)))
-    const rand = seededRandom(fileHash)
-
-    const parseDate = (dateStr: string): Date | null => {
-      if (!dateStr) return null
-      const s = String(dateStr).replace(/\./g, '-').replace(/\//g, '-').trim()
-      const d = new Date(s)
-      return isNaN(d.getTime()) ? null : d
-    }
 
     const validDates = extractedDates.map(d => parseDate(d)).filter(Boolean) as Date[]
     const hasDates = validDates.length > 0
     const sortedDates = [...validDates].sort((a, b) => a.getTime() - b.getTime())
-    const earliestDate = hasDates ? sortedDates[0] : new Date()
+
+    let baseDate: Date
+    if (hasDates) {
+      baseDate = sortedDates[0]
+    } else {
+      const refDate = new Date('2026-06-01')
+      const daysOffset = Math.floor(rand() * 60)
+      baseDate = new Date(refDate.getTime() + daysOffset * 86400000)
+    }
 
     const newRisks: RiskPrediction[] = []
     const displayNames = extractedNames.length > 0 ? extractedNames : extractedRegions.map(r => `${r}光缆段`)
@@ -420,16 +453,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       let predictedDateStr: string
       if (hasDates) {
-        const baseDate = sortedDates[i % sortedDates.length]
+        const rowDate = sortedDates[i % sortedDates.length]
         const offsetDays = level === 'high'
           ? Math.floor(rand() * 10) + 3
           : level === 'medium'
           ? Math.floor(rand() * 20) + 7
           : Math.floor(rand() * 45) + 15
-        predictedDateStr = new Date(baseDate.getTime() + offsetDays * 86400000).toISOString().slice(0, 10)
+        predictedDateStr = new Date(rowDate.getTime() + offsetDays * 86400000).toISOString().slice(0, 10)
       } else {
         const daysLater = 15 + Math.floor(rand() * 75)
-        predictedDateStr = new Date(Date.now() + daysLater * 86400000).toISOString().slice(0, 10)
+        predictedDateStr = new Date(baseDate.getTime() + daysLater * 86400000).toISOString().slice(0, 10)
       }
 
       const region = extractedRegions.length > 0 ? extractedRegions[i % extractedRegions.length] : ''

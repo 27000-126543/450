@@ -23,8 +23,8 @@ const navItems = [
 ]
 
 const roleLabels: Record<UserRole, string> = {
-  group: '集团管理员',
-  province: '省公司网络部',
+  group: '省公司网络部',
+  province: '区域经理',
   city: '运维班组长',
 }
 
@@ -90,8 +90,8 @@ export default function Layout() {
                 onChange={(e) => setUserRole(e.target.value as UserRole)}
                 className="w-full bg-secondary text-text-primary text-xs rounded px-2 py-1.5 border border-border outline-none focus:border-cyan"
               >
-                <option value="group">集团管理员</option>
-                <option value="province">省公司网络部</option>
+                <option value="group">省公司网络部</option>
+                <option value="province">区域经理</option>
                 <option value="city">运维班组长</option>
               </select>
               {userRole === 'province' && (
