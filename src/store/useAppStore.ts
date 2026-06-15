@@ -390,6 +390,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     const fileHash = hashString(fileName + JSON.stringify(parsedData.slice(0, 10)))
     const rand = seededRandom(fileHash)
 
+    const parseDate = (dateStr: string): Date | null => {
+      if (!dateStr) return null
+      const s = String(dateStr).replace(/\./g, '-').replace(/\//g, '-').trim()
+      const d = new Date(s)
+      return isNaN(d.getTime()) ? null : d
+    }
+
+    const validDates = extractedDates.map(d => parseDate(d)).filter(Boolean) as Date[]
+    const hasDates = validDates.length > 0
+    const sortedDates = [...validDates].sort((a, b) => a.getTime() - b.getTime())
+    const earliestDate = hasDates ? sortedDates[0] : new Date()
+
     const newRisks: RiskPrediction[] = []
     const displayNames = extractedNames.length > 0 ? extractedNames : extractedRegions.map(r => `${r}光缆段`)
     const numRisks = Math.min(8, Math.max(4, displayNames.length))
@@ -405,8 +417,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       for (let f = 0; f < fCount; f++) {
         factors.push(factorPool[Math.floor(rand() * factorPool.length)])
       }
-      const daysLater = 15 + Math.floor(rand() * 75)
-      const futureDate = new Date(Date.now() + daysLater * 86400000)
+
+      let predictedDateStr: string
+      if (hasDates) {
+        const baseDate = sortedDates[i % sortedDates.length]
+        const offsetDays = level === 'high'
+          ? Math.floor(rand() * 10) + 3
+          : level === 'medium'
+          ? Math.floor(rand() * 20) + 7
+          : Math.floor(rand() * 45) + 15
+        predictedDateStr = new Date(baseDate.getTime() + offsetDays * 86400000).toISOString().slice(0, 10)
+      } else {
+        const daysLater = 15 + Math.floor(rand() * 75)
+        predictedDateStr = new Date(Date.now() + daysLater * 86400000).toISOString().slice(0, 10)
+      }
+
       const region = extractedRegions.length > 0 ? extractedRegions[i % extractedRegions.length] : ''
       const cableId = `upload-${fileHash}-${i}`
 
@@ -415,7 +440,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         cableSegmentName: region ? `${region}-${name}` : name,
         riskLevel: level,
         riskFactors: Array.from(new Set(factors)),
-        predictedDate: futureDate.toISOString().slice(0, 10),
+        predictedDate: predictedDateStr,
         confidence: Number((0.45 + rand() * 0.5).toFixed(2)),
       })
     }
@@ -480,21 +505,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  getFilteredReport: () => {
+  getFilteredReport: (reportIdx) => {
     const { weeklyReports, userRole, userProvince, userCity, getFilteredProvinceSummaries, cableSegments, getFilteredCableSegments } = get()
-    const latest = weeklyReports[weeklyReports.length - 1]
-    if (!latest) return null
+    const idx = reportIdx >= 0 && reportIdx < weeklyReports.length ? reportIdx : weeklyReports.length - 1
+    const baseReport = weeklyReports[idx]
+    if (!baseReport) return null
 
-    if (userRole === 'group') return latest
+    if (userRole === 'group') return baseReport
 
-    const seedStr = `report-${userRole}-${userProvince}-${userCity}`
+    const seedStr = `report-${userRole}-${userProvince}-${userCity}-week-${idx}`
     const rand = seededRandom(hashString(seedStr))
     const filteredSegs = getFilteredCableSegments()
     const summaries = getFilteredProvinceSummaries()
 
     if (filteredSegs.length === 0) {
       return {
-        ...latest,
+        ...baseReport,
         id: `filtered-${seedStr}`,
         faultRateYoY: 0,
         faultRateMoM: 0,
@@ -506,45 +532,63 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    const avgHealth = filteredSegs.reduce((s, c) => s + c.healthIndex, 0) / filteredSegs.length
-    const baseYoY = latest.faultRateYoY
-    const baseMoM = latest.faultRateMoM
     const scaleFactor = filteredSegs.length / Math.max(cableSegments.length, 1)
+    const yoyshift = (rand() - 0.4) * 3 + (idx - weeklyReports.length + 1) * 0.8
+    const momshift = (rand() - 0.5) * 2 + (idx % 3 - 1) * 0.5
 
-    const filteredRanking = summaries
-      .map(s => ({ province: s.province, avgHours: s.avgRepairTime + rand() * 1.5 - 0.75 }))
-      .sort((a, b) => a.avgHours - b.avgHours)
-      .slice(0, 10)
-
-    const yoyshift = (rand() - 0.4) * 3
-    const momshift = (rand() - 0.5) * 2
-
-    const faultTypes = Object.keys(latest.faultTypeDistribution)
+    const faultTypes = Object.keys(baseReport.faultTypeDistribution)
     const scaledFaultDist: Record<string, number> = {}
     faultTypes.forEach(t => {
-      scaledFaultDist[t] = Math.max(1, Math.round(latest.faultTypeDistribution[t] * scaleFactor * (0.8 + rand() * 0.4)))
+      scaledFaultDist[t] = Math.max(1, Math.round(baseReport.faultTypeDistribution[t] * scaleFactor * (0.8 + rand() * 0.4)))
     })
 
-    const baseRecomms = latest.recommendations
-    const regionRecommendations = [
-      `${userProvince || userCity}辖区内高风险段巡检频次建议提升至每两周一次`,
-      `建议加强${userProvince || userCity}区域备纤资源储备`,
-      `辖区内光缆健康指数区域差异较大，建议重点关注故障多发段落`,
-      `${userCity || userProvince}班组人员配置建议补充1-2人`,
-      '建议引入光缆振动监测传感器补充预警能力',
-      '重点段落的接头盒定期检测频率建议从半年缩短为季度',
-    ]
-    const finalRecomms = [...regionRecommendations, ...baseRecomms.slice(0, 2)].slice(0, 5)
+    let filteredRanking: { province: string; avgHours: number }[] = []
+    if (userRole === 'city' && userCity) {
+      const cityDistricts = ['中心城区', '东部新区', '南部片区', '西部产业带', '北部开发区', '高新区', '经开区', '保税区']
+      const districtCount = Math.min(6, Math.max(3, Math.ceil(filteredSegs.length / 3)))
+      for (let i = 0; i < districtCount; i++) {
+        filteredRanking.push({
+          province: cityDistricts[i % cityDistricts.length],
+          avgHours: 1.5 + rand() * 6,
+        })
+      }
+      filteredRanking.sort((a, b) => a.avgHours - b.avgHours)
+    } else {
+      filteredRanking = summaries
+        .map(s => ({ province: s.province, avgHours: s.avgRepairTime + rand() * 1.5 - 0.75 }))
+        .sort((a, b) => a.avgHours - b.avgHours)
+        .slice(0, 10)
+    }
+
+    const regionLabel = userRole === 'city' && userCity ? userCity : userProvince || ''
+    const regionRecommendations = userRole === 'city'
+      ? [
+          `${userCity}辖区内高风险段落巡检频次建议提升至每周一次`,
+          `建议加强${userCity}区域备纤资源储备，重点覆盖核心接入环`,
+          `${userCity}班组故障处理响应时间仍有优化空间，建议增加应急备勤`,
+          `${userCity}城区管道光缆老化比例偏高，建议分批次更新改造`,
+          `建议在${userCity}重点路段引入光缆振动监测传感器`,
+          `${userCity}核心机房ODF架跳纤规范需加强，降低人为故障率`,
+        ]
+      : [
+          `${regionLabel}辖区内高风险段巡检频次建议提升至每两周一次`,
+          `建议加强${regionLabel}区域备纤资源储备`,
+          `辖区内光缆健康指数区域差异较大，建议重点关注故障多发段落`,
+          `${regionLabel}班组人员配置建议补充1-2人`,
+          '建议引入光缆振动监测传感器补充预警能力',
+          '重点段落的接头盒定期检测频率建议从半年缩短为季度',
+        ]
+
+    const baseRecomms = baseReport.recommendations
+    const finalRecomms = [...regionRecommendations, ...baseRecomms.slice(0, 1)].slice(0, 5)
 
     return {
-      ...latest,
+      ...baseReport,
       id: `filtered-${seedStr}`,
-      weekStart: latest.weekStart,
-      weekEnd: latest.weekEnd,
-      faultRateYoY: Number((baseYoY + yoyshift).toFixed(1)),
-      faultRateMoM: Number((baseMoM + momshift).toFixed(1)),
-      avgRepairTime: Number((latest.avgRepairTime * (0.9 + rand() * 0.2)).toFixed(1)),
-      fiberUtilization: Math.max(40, Math.round(latest.fiberUtilization * (0.85 + rand() * 0.3))),
+      faultRateYoY: Number((baseReport.faultRateYoY + yoyshift).toFixed(1)),
+      faultRateMoM: Number((baseReport.faultRateMoM + momshift).toFixed(1)),
+      avgRepairTime: Number((baseReport.avgRepairTime * (0.9 + rand() * 0.2) + (idx % 2) * 0.3).toFixed(1)),
+      fiberUtilization: Math.max(40, Math.round(baseReport.fiberUtilization * (0.85 + rand() * 0.3))),
       repairTimeRanking: filteredRanking.map(r => ({ ...r, avgHours: Number(r.avgHours.toFixed(1)) })),
       faultTypeDistribution: scaledFaultDist,
       recommendations: finalRecomms,

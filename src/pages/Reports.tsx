@@ -11,23 +11,28 @@ const yoyColor = (v: number) => v <= 0 ? 'text-success' : 'text-danger'
 
 export default function Reports() {
   const { weeklyReports, getFilteredReport, userRole, userProvince, userCity } = useAppStore()
-  const [selectedIdx, setSelectedIdx] = useState(0)
+  const [selectedIdx, setSelectedIdx] = useState(weeklyReports.length - 1)
   const [dropdownOpen, setDropdownOpen] = useState(false)
-  const baseReport = weeklyReports[selectedIdx] ?? weeklyReports[0]
-  const report = getFilteredReport() ?? baseReport
+  const report = getFilteredReport(selectedIdx)
+  const baseReport = weeklyReports[selectedIdx] ?? weeklyReports[weeklyReports.length - 1]
+  const displayReport = report ?? baseReport
 
-  const faultTypes = Object.keys(report.faultTypeDistribution)
-  const currentValues = Object.values(report.faultTypeDistribution)
-  const prevReport = weeklyReports[selectedIdx + 1]
-  const prevValues = prevReport
-    ? faultTypes.map((k) => prevReport.faultTypeDistribution[k] ?? 0)
+  const faultTypes = Object.keys(displayReport.faultTypeDistribution)
+  const currentValues = Object.values(displayReport.faultTypeDistribution)
+  const prevFiltered = selectedIdx > 0 ? getFilteredReport(selectedIdx - 1) : null
+  const prevValues = prevFiltered
+    ? faultTypes.map((k) => prevFiltered.faultTypeDistribution[k] ?? 0)
     : currentValues.map(() => 0)
   const totalFaults = currentValues.reduce((a, b) => a + b, 0)
 
-  const ranking = [...report.repairTimeRanking].sort((a, b) => a.avgHours - b.avgHours)
+  const ranking = [...displayReport.repairTimeRanking].sort((a, b) => a.avgHours - b.avgHours)
   const maxHours = Math.max(...ranking.map((r) => r.avgHours), 1)
 
   const scopeLabel = userRole === 'group' ? '全国' : userRole === 'province' ? `${userProvince}省` : `${userCity}市`
+
+  const getHistoryRow = (idx: number) => {
+    return getFilteredReport(idx) ?? weeklyReports[idx]
+  }
 
   return (
     <div className="space-y-4 p-4">
@@ -40,17 +45,20 @@ export default function Reports() {
           <div className="relative">
             <button className="btn-secondary flex items-center gap-2" onClick={() => setDropdownOpen(!dropdownOpen)}>
               <FileText size={16} />
-              {report.weekStart} ~ {report.weekEnd}
+              {displayReport.weekStart} ~ {displayReport.weekEnd}
               <ChevronDown size={14} />
             </button>
             {dropdownOpen && (
               <div className="absolute right-0 top-full z-10 mt-1 min-w-[240px] rounded-lg border border-border bg-card py-1 shadow-lg">
-                {weeklyReports.map((r, i) => (
-                  <button key={r.id} className={`w-full px-4 py-2 text-left text-sm hover:bg-card-hover ${i === selectedIdx ? 'text-cyan' : 'text-text-secondary'}`}
-                    onClick={() => { setSelectedIdx(i); setDropdownOpen(false) }}>
-                    {r.weekStart} ~ {r.weekEnd}
-                  </button>
-                ))}
+                {weeklyReports.map((r, i) => {
+                  const row = getHistoryRow(i)
+                  return (
+                    <button key={r.id} className={`w-full px-4 py-2 text-left text-sm hover:bg-card-hover ${i === selectedIdx ? 'text-cyan' : 'text-text-secondary'}`}
+                      onClick={() => { setSelectedIdx(i); setDropdownOpen(false) }}>
+                      {row.weekStart} ~ {row.weekEnd}
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -63,20 +71,20 @@ export default function Reports() {
       <div className="grid grid-cols-4 gap-4">
         <div className="card card-glow p-4">
           <p className="text-xs text-text-muted">故障率同比</p>
-          <p className={`stat-value font-din ${yoyColor(report.faultRateYoY)}`}>{report.faultRateYoY > 0 ? '+' : ''}{report.faultRateYoY}%</p>
+          <p className={`stat-value font-din ${yoyColor(displayReport.faultRateYoY)}`}>{displayReport.faultRateYoY > 0 ? '+' : ''}{displayReport.faultRateYoY}%</p>
         </div>
         <div className="card card-glow p-4">
           <p className="text-xs text-text-muted">故障率环比</p>
-          <p className={`stat-value font-din ${yoyColor(report.faultRateMoM)}`}>{report.faultRateMoM > 0 ? '+' : ''}{report.faultRateMoM}%</p>
+          <p className={`stat-value font-din ${yoyColor(displayReport.faultRateMoM)}`}>{displayReport.faultRateMoM > 0 ? '+' : ''}{displayReport.faultRateMoM}%</p>
         </div>
         <div className="card card-glow p-4">
           <p className="text-xs text-text-muted">平均修复时长</p>
-          <p className="stat-value font-din text-text-primary">{report.avgRepairTime}<span className="text-sm text-text-muted ml-1">小时</span></p>
+          <p className="stat-value font-din text-text-primary">{displayReport.avgRepairTime}<span className="text-sm text-text-muted ml-1">小时</span></p>
         </div>
         <div className="card card-glow p-4">
           <p className="text-xs text-text-muted">纤芯利用率</p>
-          <p className="stat-value font-din text-text-primary">{report.fiberUtilization}%</p>
-          <div className="health-bar mt-2"><div className="health-bar-fill" style={{ width: `${report.fiberUtilization}%`, background: 'linear-gradient(90deg, #00D4FF, #00E676)' }} /></div>
+          <p className="stat-value font-din text-text-primary">{displayReport.fiberUtilization}%</p>
+          <div className="health-bar mt-2"><div className="health-bar-fill" style={{ width: `${displayReport.fiberUtilization}%`, background: 'linear-gradient(90deg, #00D4FF, #00E676)' }} /></div>
         </div>
       </div>
 
@@ -150,7 +158,7 @@ export default function Reports() {
         <div className="card p-4">
           <h3 className="mb-3 text-sm font-semibold text-text-primary">策略优化建议</h3>
           <div className="space-y-3">
-            {report.recommendations.map((rec, i) => (
+            {displayReport.recommendations.map((rec, i) => (
               <div key={i} className={`rounded-lg border-l-4 ${priorityColors[i % 3]} bg-card-hover p-3`}>
                 <div className="flex items-start gap-2">
                   <Lightbulb size={16} className="text-cyan mt-0.5 shrink-0" />
@@ -178,18 +186,23 @@ export default function Reports() {
               </tr>
             </thead>
             <tbody>
-              {weeklyReports.map((r, i) => (
-                <tr key={r.id} className="border-b border-border/50">
-                  <td className="py-2 text-text-secondary">{r.weekStart} ~ {r.weekEnd}</td>
-                  <td className={`py-2 font-din ${yoyColor(r.faultRateYoY)}`}>{r.faultRateYoY > 0 ? '+' : ''}{r.faultRateYoY}%</td>
-                  <td className={`py-2 font-din ${yoyColor(r.faultRateMoM)}`}>{r.faultRateMoM > 0 ? '+' : ''}{r.faultRateMoM}%</td>
-                  <td className="py-2 font-din text-text-secondary">{r.avgRepairTime}小时</td>
-                  <td className="py-2 font-din text-text-secondary">{r.fiberUtilization}%</td>
-                  <td className="py-2">
-                    <button className="btn-secondary text-xs" onClick={() => setSelectedIdx(i)}>查看</button>
-                  </td>
-                </tr>
-              ))}
+              {weeklyReports.map((r, i) => {
+                const row = getHistoryRow(i)
+                return (
+                  <tr key={r.id} className={`border-b border-border/50 ${i === selectedIdx ? 'bg-cyan/5' : ''}`}>
+                    <td className="py-2 text-text-secondary">{row.weekStart} ~ {row.weekEnd}</td>
+                    <td className={`py-2 font-din ${yoyColor(row.faultRateYoY)}`}>{row.faultRateYoY > 0 ? '+' : ''}{row.faultRateYoY}%</td>
+                    <td className={`py-2 font-din ${yoyColor(row.faultRateMoM)}`}>{row.faultRateMoM > 0 ? '+' : ''}{row.faultRateMoM}%</td>
+                    <td className="py-2 font-din text-text-secondary">{row.avgRepairTime}小时</td>
+                    <td className="py-2 font-din text-text-secondary">{row.fiberUtilization}%</td>
+                    <td className="py-2">
+                      <button className="btn-secondary text-xs" onClick={() => setSelectedIdx(i)}>
+                        {i === selectedIdx ? '当前' : '查看'}
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
