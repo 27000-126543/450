@@ -108,7 +108,7 @@ interface AppState {
   uploadInspectionPlan: (fileName: string, parsedData: string[][]) => void
   resetInspectionData: () => void
 
-  getFilteredReport: () => WeeklyReport | null
+  getFilteredReport: (reportIdx: number) => WeeklyReport | null
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -256,16 +256,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   canApproveStep: (alert, stepIndex) => {
     if (alert.level === 1) {
-      return stepIndex === 0 && (get().userRole === 'city' || get().userRole === 'group')
+      return stepIndex === 0 && get().userRole === 'city'
     }
     const flow = alert.approvalFlow
     if (stepIndex >= flow.length) return false
     const step = flow[stepIndex]
     if (step.status !== 'pending') return false
     const requiredRole = roleStepMap[step.step]
-    const { userRole } = get()
-    if (userRole === 'group') return true
-    return userRole === requiredRole
+    return get().userRole === requiredRole
   },
 
   handleAlertAction: (alertId, action, step) => {
